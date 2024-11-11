@@ -1,21 +1,18 @@
 #include "psort.h"
 #include "merge_sort.h"
+#include "radix_sort.h"
+#include "cond_lock.h"
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
 #include <pthread.h>
 #include <fcntl.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
 #include <string.h>
 #include <stdbool.h>
-#include "cond_lock.h"
-
-typedef struct {
-	int key;
-	RecordData data;
-} Record;
 
 typedef struct {
 	Record* data;
@@ -34,8 +31,12 @@ typedef struct {
 	size_t entryCount;
 	size_t offset;
 
-	size_t finalCount;
+	// Used in the merging step of the algorithm. Represents how many records this thread
+	// has accumulated with others.
+	size_t accumulatedSize;
 
+	// If this thread has done it's individual sorting portion already. Only access this flag
+	// with sortLock.
 	bool sorted;
 	ConditionLock sortLock;
 } Thread;
@@ -46,9 +47,9 @@ void closeOutput();
 void* threadMain(void*);
 void selectionSort(Key* data, size_t entryCount);
 void spawnThreads(int);
-void entriesToKeys(Record *entries, Key *keys, size_t entryCount);
-void keysToEntries(Key *keys, Record *entries, size_t entryCount);
-void coalesceRecords();
+void entriesToKeys(Record *entries, SortKey *keys, size_t entryCount);
+void keysToEntries(SortKey *keys, Record *entries, size_t entryCount);
+void mmapFailed();
 
 struct {
 	volatile bool createdThreads;
@@ -62,24 +63,7 @@ struct {
 	bool keyColaescingStarted;
 } World;
 
-int main(int argc, char* argv[]) {
-	/*int th = 6;
-	for (int i = 0; i < th; i++) {
-		printf(":: %i\n", i);
-
-		int d = 2;
-		while (d < th * 2) {
-			if (i % d != 0) break;
-
-			int t = i + d / 2;
-			if (t >= th) break;
-
-			printf("  J%i\n", t);
-			d *= 2;
-		}
-	}
-	return 0;*/
-	
+int main(int argc, char* argv[]) {	
 	if (argc <= 3) {
 		fprintf(stderr, "Uso incorreto. Utilize com <entrada> <saída> <threads>\n");
 		return -1;
@@ -98,65 +82,76 @@ int main(int argc, char* argv[]) {
 		return -1;
 	}
 
-	// Open stream files
+	// Open files
 	openInput(inputFile);	
 	openOutput(outputFile);
 
-	World.bufferA = malloc(World.input.entryCount * sizeof(Key));
-	World.bufferB = malloc(World.input.entryCount * sizeof(Key));
-	//printf("Sorting %lu entries.\n", World.input.entryCount);
+	// Allocate master memory buffer
+	size_t bufferSize = World.input.entryCount * sizeof(Key);
+	Key* masterBuffer = mmap(NULL, 2 * bufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+	if (masterBuffer == MAP_FAILED) mmapFailed();
+	
+	World.bufferA = &masterBuffer[0];
+	World.bufferB = &masterBuffer[World.input.entryCount];
 
 	// Spawn N threads
 	spawnThreads(threadCount);
-	
-	/*Thread t;
-	t.entryCount = World.input.entryCount;
-	t.offset = 0;
-	threadMain(&t);*/
 
 	closeOutput();
-	//printf("Done.\n");
 	return 0; 
 }
 
 void* threadMain(void* threadInputArg) {
 	Thread* params = (Thread*) threadInputArg;
 
-	size_t entryCount = params->entryCount;
-	//printf("T%i Handling N=%lu [%lu, %lu]\n", params->index, params->entryCount, params->offset, params->offset + params->entryCount - 1);
-	
-	Record* input = &World.input.data[params->offset];
-	Record* output = &World.output.data[params->offset];
+	const size_t entryCount = params->entryCount;
+	Record* const input = &World.input.data[params->offset];
+	Record* const output = &World.output.data[params->offset];
 	
 	Key* bufferA = &World.bufferA[params->offset];
 	Key* bufferB = &World.bufferB[params->offset];
 
+	//printf("T%i Handling N=%lu [%lu, %lu]\n", params->index, params->entryCount, params->offset, params->offset + params->entryCount - 1);
+
 	// Convert full records to sorting entries in buffer A
 	entriesToKeys(input, bufferA, entryCount);
 
-	// Perform merge sort from buffer A to buffer B
-	mergeSort(bufferA, entryCount, bufferB);
+	// Perform radix sort on buffer A. The results remain in buffer A
+	radixSort(bufferA, entryCount, bufferB);
+	/*Key* tmp = bufferA;
+	bufferA = bufferB;
+	bufferB = tmp;*/
 
 	// In the highly unlikely case this thread finishes sorting before the other threads are even
 	// done being created, just spin wait for a few cycles.
 	while(!World.createdThreads){}
 
-	int index = params->index;
-	int th = World.numThreads;
-	int d = 2;
+	// Now, we will perform a parallel merge. This thread will wait for its brothers to finish
+	// their sorting portion, then will join their work with ours.
+	// For example, if we have 4 threads, here's what each thread will do:
+	// 0: Will join the work by 1, then all the work of 2
+	// 1: Will just quit.
+	// 2: Will join the work by 3
+	// 3: Will just quit.
+	int thIndex = params->index;
+	int numThreads = World.numThreads;
+
+	// Current size will accumulate the size of the work joined from other threads
 	size_t currentSize = entryCount;
 
-	
-	while (d < th * 2) {
-		if (index % d != 0) break;
+	for (int level = 1; level < numThreads; level *= 2) {
+		// Not a multiple of the current level, nothing to do anymore.
+		if (thIndex % (level * 2) != 0) break;
 		
-		int targetIndex = index + d / 2;
-		if (targetIndex >= th) break;
+		// If the target thead index doesn't exit, quit. We only quit here if the global number of
+		// threads isn't a power of 2.
+		int targetIndex = thIndex + level;
+		if (targetIndex >= numThreads) break;
 
 		Thread* target = &World.threads[targetIndex];
 		//printf("%i: Joining with %i\n", index, targetIndex);
 			
-		// Wait target thread to finish it's sorting portion
+		// Wait for the target thread to finish it's sorting portion
 		cl_lock(&target->sortLock);
 		while (!target->sorted) {
 			cl_wait(&target->sortLock);
@@ -164,21 +159,22 @@ void* threadMain(void* threadInputArg) {
 		cl_unlock(&target->sortLock);
 
 		size_t targetOffset = target->offset;
-		size_t targetSize = target->finalCount;
+		size_t targetSize = target->accumulatedSize;
 		size_t finalSize = currentSize + targetSize;
 		//printf("%i: Merging: %lu [%lu, %lu] and %lu [%lu, %lu]\n", index, currentSize, params->offset, params->offset + currentSize - 1, targetSize, targetOffset, targetOffset + targetSize - 1);
 	
-		// Merge my half and the joined half both in buffer B into buffer A
-		mergeP(bufferB, finalSize, currentSize, bufferA);
-
-		// Copy buffer A to buffer B
-		memcpy(bufferB, bufferA, finalSize * sizeof(Key));
+		// Merge my half and the joined half both in buffer A into buffer B
+		mergeP(bufferA, finalSize, currentSize, bufferB);
+		
+		// Copy buffer B to buffer A
+		memcpy(bufferA, bufferB, finalSize * sizeof(Key));	
 
 		currentSize += targetSize;
-		d *= 2;
 	}
 
-	params->finalCount = currentSize;
+	// I am done joining the work of others. This is my final accumulated size. If any threads
+	// use my work to join into theirs, this size will be used to account for all records.
+	params->accumulatedSize = currentSize;
 
 	// Notify other threads that this one has finished its sorting.
 	cl_lock(&params->sortLock);
@@ -186,9 +182,10 @@ void* threadMain(void* threadInputArg) {
 	cl_notify(&params->sortLock);
 	cl_unlock(&params->sortLock);
 
-	// If I am the first thread, no thread is waiting for me. I am responsible for starting the
-	// key coalescing phase.
-	if (index == 0) {
+	// If I am the first thread, no thread will wait for me. Also, I will always accumulate the
+	// sorted arrays from everyone.
+	// I am responsible for starting the final key coalescing phase.
+	if (thIndex == 0) {
 		cl_lock(&World.keyCoalesceLock);
 		World.keyColaescingStarted = true;
 		cl_notifyAll(&World.keyCoalesceLock);
@@ -204,8 +201,9 @@ void* threadMain(void* threadInputArg) {
 	}
 	cl_unlock(&World.keyCoalesceLock);
 
-	// Coalesce only my own original keys. The other threads will coalesce theirs as well.
-	keysToEntries(bufferB, output, entryCount);
+	// Coalesce only my own original key range. The other threads will coalesce theirs as well
+	// in parallel.
+	keysToEntries(bufferA, output, entryCount);
 
 	return NULL;
 }
@@ -248,14 +246,14 @@ void spawnThreads(int threadCount) {
 	//pthread_join(World.threads[0].thread, NULL);
 }
 
-void entriesToKeys(Record* entries, Key* keys, size_t entryCount) {
+void entriesToKeys(Record* entries, SortKey* keys, size_t entryCount) {
 	for (int i = 0; i < entryCount; i++) {
 		keys[i].key = entries[i].key;
 		keys[i].data = &entries[i].data;
 	}
 }
 
-void keysToEntries(Key* keys, Record* entries, size_t entryCount) {
+void keysToEntries(SortKey* keys, Record* entries, size_t entryCount) {
 	for (int i = 0; i < entryCount; i++) {
 		entries[i].key = keys[i].key;
 		entries[i].data = *keys[i].data;		
@@ -331,11 +329,8 @@ void closeOutput() {
 		fprintf(stderr, "Output close failed.\n");
 	}	
 }
-/*
-void arrPrint(Key* arr, int n) {
-	printf("[");
-	for(int i = 0; i < n - 1; i++) {
-		printf("%li, ", arr[i].key);
-	}
-	printf("%li]", arr[n - 1].key);
-}*/
+
+void mmapFailed() {
+	fprintf(stderr, "mmap() call failed. %i\n", errno);
+	exit(-1);
+}

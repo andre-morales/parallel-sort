@@ -7,7 +7,12 @@ typedef struct {
 } RecordData;
 
 typedef struct {
-	int64_t key;
+	uint32_t key;
+	RecordData data;
+} Record;
+
+typedef struct {
+	uint32_t key;
 	RecordData* data;
 } SortKey;
 
