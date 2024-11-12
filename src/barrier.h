@@ -7,5 +7,5 @@ typedef struct {
 	int count;
 } Barrier;
 
-void barrierInit(Barrier* barrier, int target);
-void barrierWait(Barrier* barrier);
+void barr_init(Barrier* barrier, int target);
+void barr_wait(Barrier* barrier);

@@ -1,6 +1,6 @@
 .PHONY: default build generate verify test
 
-SOURCES=src/psort.c src/radix_sort.c src/barrier.c src/cond_lock.c src/merge_sort.c src/selection_sort.c
+SOURCES=src/psort.c src/radix_sort.c src/barrier.c src/slow_barrier.c src/cond_lock.c src/merge_sort.c src/selection_sort.c
 
 default: build
 

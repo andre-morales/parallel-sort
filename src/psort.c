@@ -3,6 +3,7 @@
 #include "radix_sort.h"
 #include "cond_lock.h"
 #include "barrier.h"
+#include "slow_barrier.h"
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
@@ -75,19 +76,13 @@ struct {
 	ConditionLock keyCoalesceLock;
 
 	// Radix sort state
-	int radixTally[RADIX_16];
+	int rxTally[RADIX_16];
 
-	int radixThreadsFinishedCoalescing;
-	ConditionLock radixThreadsFinishedCoalescingLock;
+	int rxTallyCompleted;
+	ConditionLock rxTallyCompletedLock;
 
-	int radixTallyCompleted;
-	ConditionLock radixTallyCompletedLock;
-
-	Barrier radixCountedBarrier;
-	Barrier radixPassBarrier;
-
-	int countedThreads;
-	ConditionLock countedThreadsLock;
+	Barrier rxPassBarrier;
+	SlowBarrier rxCountedBarrier;
 } World;
 
 int main(int argc, char* argv[]) {	
@@ -104,38 +99,6 @@ int main(int argc, char* argv[]) {
 	World.output.data[3] = d;
 	closeOutput();*/
 	//return 0;
-
-	/*int countA[65536];
-	int countB[65536];
-	
-	
-
-	
-		Key elementsA[] = {{4}, {9}, {1}, {0}};
-		memset(countA, 0, sizeof(countA));
-		radixCount(elementsA, 4, 0, countA);
-		//radixCountToPrefix(count);
-	
-		Key elementsB[] = {{6}, {5}, {2}, {3}};
-		memset(countB, 0, sizeof(countB));
-		radixCount(elementsB, 4, 0, countB);
-	
-
-	int tally[65536];
-	memset(tally, 0, sizeof(tally));
-	radixTallyCount(tally, countA);
-	radixTallyCount(tally, countB);
-
-	radixCountToPrefix(tally);
-
-	Key result[8];
-	radixCoalesceExt(elementsB, 4, 0, countB, tally, result);
-	radixCoalesceExt(elementsA, 4, 0, countA, tally, result);
-
-
-	printKeys(result, 8);
-	//radixCoalesce()
-	return 0;*/
 
 	if (argc <= 3) {
 		fprintf(stderr, "Uso incorreto. Utilize com <entrada> <saída> <threads>\n");
@@ -180,20 +143,14 @@ void radixPass(Thread* thread, Key* source, Key* dest, int pass, size_t entryCou
 	
 	// Perform the parallel counting portion
 	radixCount(source, entryCount, pass * 16, count);
-	
+
 	// If I'm the last thread to arrive here, I won't wait, I will perform the tally for everyone.
 	// Otherwise, I'm not the last thread to finish counting. I won't be the tally thread,
 	// I will wait here until the tally thead notifies me.
-	bool tallyThread = true;
-	cl_lock(&World.countedThreadsLock);
-	if (++World.countedThreads < World.numThreads) {
-		tallyThread = false;
-		cl_wait(&World.countedThreadsLock);
-	}
-	cl_unlock(&World.countedThreadsLock);
-	
-	if (tallyThread) {
-		int* counts = World.radixTally;
+	bool isTallyThread = slowbarr_wait(&World.rxCountedBarrier);
+
+	if (isTallyThread) {
+		int* counts = World.rxTally;
 		memset(counts, 0, RADIX_16 * sizeof(int));
 
 		// Tally up the counts of all threads
@@ -209,27 +166,22 @@ void radixPass(Thread* thread, Key* source, Key* dest, int pass, size_t entryCou
 		}
 
 		// Convert the tally arrays to prefixes
-		radixCountToPrefix(World.radixTally);
+		radixCountToPrefix(World.rxTally);
 
-		// Alert the other threads that the tally has finished.
-		cl_lock(&World.countedThreadsLock);
-
-		// Reset the counting threads for the future pass.
-		World.countedThreads = 0;
-		cl_notifyAll(&World.countedThreadsLock);
-		cl_unlock(&World.countedThreadsLock);
+		// Lower the barrier for the other threads
+		slowbarr_lower(&World.rxCountedBarrier);
 	} 
 
 	int* prefix = count;
 	for (int i = 0; i < RADIX_16; i++) {
-		prefix[i] = World.radixTally[i] - thread->acculCount[i];
+		prefix[i] = World.rxTally[i] - thread->acculCount[i];
 	}
 	
 	// The tally has been finished. The global tally information can be used to coalesce the sorted portions now.
 	radixCoalesce(source, entryCount, pass * 16, prefix, dest);
 
 	// Everyone must finish their coalescing to consider the pass finished.
-	barrierWait(&World.radixPassBarrier);
+	barr_wait(&World.rxPassBarrier);
 }
 
 void* threadMain(void* threadInputArg) {
@@ -325,15 +277,11 @@ void parallelMerge(Thread* thread, Key* bufferA, Key* bufferB, size_t entryCount
 
 void spawnThreads(int threadCount) {
 	cl_init(&World.keyCoalesceLock);
-	cl_init(&World.radixTallyCompletedLock);
-	cl_init(&World.radixThreadsFinishedCoalescingLock);
-	barrierInit(&World.radixCountedBarrier, threadCount);
-	barrierInit(&World.radixPassBarrier, threadCount);
+	cl_init(&World.rxTallyCompletedLock);
+	barr_init(&World.rxPassBarrier, threadCount);
+	slowbarr_init(&World.rxCountedBarrier, threadCount);
 	World.keyColaescingStarted = false;
-	World.radixTallyCompleted = -1;
-	World.radixThreadsFinishedCoalescing = 0;
-	World.countedThreads = 0;
-	cl_init(&World.countedThreadsLock);
+	World.rxTallyCompleted = -1;
 
 	size_t division = World.input.entryCount / threadCount;
 	size_t remainder = World.input.entryCount % threadCount;

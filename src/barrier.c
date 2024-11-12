@@ -1,11 +1,11 @@
 #include "barrier.h"
 
-void barrierInit(Barrier* barrier, int target) {
+void barr_init(Barrier* barrier, int target) {
     cl_init(&barrier->lock);
     barrier->target = target;
 }
 
-void barrierWait(Barrier* barrier) {
+void barr_wait(Barrier* barrier) {
     cl_lock(&barrier->lock);
     barrier->count++;
     if (barrier->count == barrier->target) {
