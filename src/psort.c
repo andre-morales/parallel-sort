@@ -45,7 +45,7 @@ typedef struct {
 	bool counted;
 	ConditionLock countLock;
 
-	int* radixCount;
+	int radixCount[RADIX_16];
 	int acculCount[RADIX_16];
 } Thread;
 
@@ -161,10 +161,8 @@ int main(int argc, char* argv[]) {
 	Key* masterBuffer = mmap(NULL, 2 * bufferSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 	if (masterBuffer == MAP_FAILED) mmapFailed();
 	
-	//World.bufferA = &masterBuffer[0];
-	//World.bufferB = &masterBuffer[World.input.entryCount];
-	World.bufferA = calloc(World.input.entryCount * sizeof(Key) * 4, 1);
-	World.bufferB = calloc(World.input.entryCount * sizeof(Key) * 4, 1);
+	World.bufferA = &masterBuffer[0];
+	World.bufferB = &masterBuffer[World.input.entryCount];
 
 	// Spawn N threads
 	spawnThreads(threadCount);
@@ -173,7 +171,8 @@ int main(int argc, char* argv[]) {
 	return 0; 
 }
 
-void radixPass(Thread* thread, Key* source, Key* dest, int pass, size_t entryCount, int* count) {
+void radixPass(Thread* thread, Key* source, Key* dest, int pass, size_t entryCount) {
+	int* count = thread->radixCount;
 	memset(count, 0, RADIX_16 * sizeof(int));
 	radixCount(source, entryCount, pass * 16, count);
 
@@ -199,11 +198,11 @@ void radixPass(Thread* thread, Key* source, Key* dest, int pass, size_t entryCou
 		cl_unlock(&World.radixTallyCompletedLock);
 	} else {
 		// I'm the first thread. I am responsible for doing the tally of each count array.
-		int counts[RADIX_16];
+		int* counts = World.radixTally;
 		memset(counts, 0, RADIX_16 * sizeof(int));
 
 		// Tally up the counts of all threads
-		for (int t = World.numThreads -1; t >= 0; t--) {
+		for (int t = World.numThreads - 1; t >= 0; t--) {
 			Thread* th = &World.threads[t];
 			memcpy(th->acculCount, counts, sizeof(int) * RADIX_16);	
 
@@ -213,9 +212,7 @@ void radixPass(Thread* thread, Key* source, Key* dest, int pass, size_t entryCou
 		}
 
 		// Convert the tally arrays to prefixes
-		int* radixTally = World.radixTally;
-		memcpy(radixTally, counts, sizeof(int) * RADIX_16);
-		radixCountToPrefix(radixTally);
+		radixCountToPrefix(World.radixTally);
 
 		// Alert everyone that the tally process is finished
 		cl_lock(&World.radixTallyCompletedLock);
@@ -224,13 +221,13 @@ void radixPass(Thread* thread, Key* source, Key* dest, int pass, size_t entryCou
 		cl_unlock(&World.radixTallyCompletedLock);		
 	} 
 
-	memcpy(count, World.radixTally, RADIX_16 * sizeof(int));
 	for (int i = 0; i < RADIX_16; i++) {
-		count[i] -= thread->acculCount[i];
+		count[i] = World.radixTally[i] - thread->acculCount[i];
 	}
 	
 	// The tally has been finished. The global tally information can be used to coalesce the sorted portions now.
 	radixCoalesce(source, entryCount, pass * 16, count, dest);
+	//radixCoalesceExt(source, entryCount, pass * 16, World.radixTally, thread->acculCount, dest);
 	barrierWait(&World.radixPass2Barrier);
 }
 
@@ -248,17 +245,14 @@ void* threadMain(void* threadInputArg) {
 	entriesToKeys(input, bufferA, entryCount);
 
 	// Generate count arrays
-	int count[RADIX_16];
-	thread->radixCount = count;
+	//int count[RADIX_16];
+	//thread->radixCount = count;
 
-	radixPass(thread, bufferA, World.bufferB, 0, entryCount, count);
-	memcpy(bufferA, bufferB, entryCount * sizeof(Key));
-
-	radixPass(thread, bufferA, World.bufferB, 1, entryCount, count);
-	memcpy(bufferA, bufferB, entryCount * sizeof(Key));
+	radixPass(thread, bufferA, World.bufferB, 0, entryCount);
+	radixPass(thread, bufferB, World.bufferA, 1, entryCount);
 
 	// I am done with the coalescing phase of the radix sort. I will now wait for the final record coalescing.
-	cl_lock(&World.radixThreadsFinishedCoalescingLock);
+	/*cl_lock(&World.radixThreadsFinishedCoalescingLock);
 	World.radixThreadsFinishedCoalescing++;
 
 	if (World.radixThreadsFinishedCoalescing == World.numThreads) {
@@ -266,7 +260,7 @@ void* threadMain(void* threadInputArg) {
 	} else {
 		cl_wait(&World.radixThreadsFinishedCoalescingLock);
 	}
-	cl_unlock(&World.radixThreadsFinishedCoalescingLock);
+	cl_unlock(&World.radixThreadsFinishedCoalescingLock);*/
 
 	// Perform radix sort on buffer A. The results remain in buffer A
 	//radixSort(bufferA, entryCount, bufferB);

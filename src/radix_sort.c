@@ -50,13 +50,12 @@ void radixCoalesceX(Key* arr, int n, int shift, int* prefix, Key* output) {
 	}
 }
 
-
-void radixCoalesceExt(const Key* arr, int n, int shift, int* count, const int* prefix, Key* output) {
+void radixCoalesceExt(const Key* arr, int n, int shift, const int* prefix, int* count, Key* output) {
 	for (int i = 0; i < n; i++) {
 		int word = (arr[i].key >> shift) & (RADIX16 - 1);
-		int pos = prefix[word] - count[word];
+		int pos = prefix[word] - (--count[word]);
+		//--count[word];
 		output[pos] = arr[i];
-		--count[word];
 	}
 }
 
