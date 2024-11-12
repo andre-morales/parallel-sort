@@ -4,6 +4,7 @@
 		"stat.h": "c",
 		"psort.h": "c",
 		"stdint.h": "c",
-		"fcntl.h": "c"
+		"fcntl.h": "c",
+		"string.h": "c"
 	}
 }

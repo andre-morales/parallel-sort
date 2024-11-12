@@ -74,10 +74,10 @@ int main(int argc, char **argv) {
     printf("Semente: %d\n", semente);
     printf("\n");
     printf("Prosseguir? (s/n)\n");
-    char resposta = getchar();
+    /*char resposta = getchar();
     if (resposta != 's') {
         exit(0);
-    }
+    }*/
 
     int fd = open(filename, O_CREAT | O_RDWR | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH);
     int r;
