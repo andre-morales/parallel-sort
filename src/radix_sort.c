@@ -4,8 +4,8 @@
 #define RADIX8 256
 #define RADIX16 65536
 
-//#pragma GCC push_options
-//#pragma GCC optimize("-O2")
+#pragma GCC push_options
+#pragma GCC optimize("-O2")
 
 void radixCount(Key* arr, int n, int shift, int* count) {
 	// Count occurrences of each word value in the count array
@@ -15,22 +15,9 @@ void radixCount(Key* arr, int n, int shift, int* count) {
 	}
 }
 
-void radixTallyCount(int* countA, int* countB) {
-	for (int i = 0; i < RADIX16; i++) {
-		countA[i] += countB[i];
-	}
-}
-
 void radixCountToPrefix(int* count) {
 	for (int i = 1; i < RADIX16; ++i) {
 		count[i] += count[i - 1];
-	}
-}
-
-void radixPrefix(int* count, int* prefix) {
-	prefix[0] = 0;
-	for (int i = 1; i < RADIX16; ++i) {
-		prefix[i] += prefix[i-1] + count[i - 1];
 	}
 }
 
@@ -38,23 +25,6 @@ void radixCoalesce(Key* arr, int n, int shift, int* prefix, Key* output) {
 	for (int i = n - 1; i >= 0; --i) {
 		int word = (arr[i].key >> shift) & (RADIX16 - 1);
 		int pos = --prefix[word];
-		output[pos] = arr[i];
-	}
-}
-
-void radixCoalesceX(Key* arr, int n, int shift, int* prefix, Key* output) {
-	for (int i = 0; i < n; i++) {
-		int word = (arr[i].key >> shift) & (RADIX16 - 1);
-		int pos = --prefix[word];
-		output[pos] = arr[i];
-	}
-}
-
-void radixCoalesceExt(const Key* arr, int n, int shift, const int* prefix, int* count, Key* output) {
-	for (int i = 0; i < n; i++) {
-		int word = (arr[i].key >> shift) & (RADIX16 - 1);
-		int pos = prefix[word] - (--count[word]);
-		//--count[word];
 		output[pos] = arr[i];
 	}
 }
@@ -122,4 +92,4 @@ void radixSort(Key* data, int n, Key* buffer) {
 	}*/
 }
 
-//#pragma GCC pop_options
+#pragma GCC pop_options
