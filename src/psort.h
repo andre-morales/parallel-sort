@@ -2,6 +2,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define INLINE inline __attribute__((always_inline)) 
+
 typedef struct {
 	char data[96];
 } RecordData;

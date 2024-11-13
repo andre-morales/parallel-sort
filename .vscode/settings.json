@@ -5,6 +5,10 @@
 		"psort.h": "c",
 		"stdint.h": "c",
 		"fcntl.h": "c",
-		"string.h": "c"
+		"string.h": "c",
+		"radix_sort.h": "c",
+		"stddef.h": "c",
+		"merge_sort.h": "c",
+		"allocator.h": "c"
 	}
 }
