@@ -9,6 +9,8 @@
 		"radix_sort.h": "c",
 		"stddef.h": "c",
 		"merge_sort.h": "c",
-		"allocator.h": "c"
+		"allocator.h": "c",
+		"slow_barrier.h": "c",
+		"barrier.h": "c"
 	}
 }

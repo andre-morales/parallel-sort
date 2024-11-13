@@ -11,7 +11,7 @@ typedef struct {
 static int count = 0;
 static size_t totalSize = 0;
 
-static Allocation allocations[128];
+static Allocation allocations[16];
 
 void mm_alloc(void* pointer, size_t size) {
     allocations[count].dest = pointer;

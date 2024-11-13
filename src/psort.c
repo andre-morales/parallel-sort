@@ -32,49 +32,10 @@ typedef struct {
 	int file;
 } TOutput;
 
+struct Thread_t;
+typedef struct Thread_t Thread;
+
 typedef struct {
-	int index;
-	pthread_t thread;
-	size_t entryCount;
-	size_t offset;
-
-	#if ENABLE_BIMERGE
-		// Used in the merging step of the algorithm. Represents how many records this thread
-		// has accumulated with others.
-		size_t accumulatedSize;
-	
-		// If this thread has done it's individual sorting portion already. Only access this flag
-		// with sortLock.
-		bool sorted;
-		ConditionLock sortLock;
-	#endif
-
-	#ifdef ENABLEDX
-	int* radixCount;
-	int* acculCount;
-	#else
-	int radixCount[RADIX_COUNT];
-	int acculCount[RADIX_COUNT];
-	#endif
-} Thread;
-
-void openInput(const char*);
-void openOutput(const char*);
-void closeOutput();
-void* threadMain(void*);
-void threadSortRadixAndMerge(Thread*, Key*, Key*, size_t);
-void threadFullRadix(Thread*, Key*, Key*, size_t);
-
-void selectionSort(Key* data, size_t entryCount);
-void spawnThreads(int);
-void entriesToKeys(Record *entries, SortKey *keys, size_t entryCount);
-void keysToEntries(SortKey *keys, Record *entries, size_t entryCount);
-void preFault(void* buffer, int size);
-void printKeys(const Key* arr, int n);
-void parallelMerge(Thread* thread, Key* bufferA, Key* bufferB, size_t entryCount);
-void radixPass(Thread* thread, Key* source, Key* dest, int pass, int entryCount);
-
-struct {
 	volatile bool createdThreads;
 	int numThreads;
 	Thread* threads;
@@ -95,23 +56,72 @@ struct {
 	Barrier rxPassBarrier;
 	Barrier rxDistCountedBarrier;
 	SlowBarrier rxCountedBarrier;
-	CountBarrier rxCountDoneBarrier;
-} World;
+} World_t;
+
+typedef struct Thread_t {
+	int index;
+	pthread_t thread;
+	size_t entryCount;
+	size_t offset;
+
+	#if ENABLE_BIMERGE
+		// Used in the merging step of the algorithm. Represents how many records this thread
+		// has accumulated with others.
+		size_t accumulatedSize;
+	
+		// If this thread has done it's individual sorting portion already. Only access this flag
+		// with sortLock.
+		bool sorted;
+		ConditionLock sortLock;
+	#endif
+
+	// In the distributed tally phase, how many digits will this thread handle
+	int rxCountSize;
+
+	// In the distributed tally phase, what index should this thread start counting from
+	int rxCountOffset;
+
+	#ifdef ENABLEDX
+	int* radixCount;
+	int* acculCount;
+	#else
+	int radixCount[RADIX_COUNT];
+	int acculCount[RADIX_COUNT];
+	#endif
+} Thread;
+
+World_t World;
+
+void openInput(const char*);
+void openOutput(const char*);
+void closeOutput();
+void* threadMain(void*);
+void threadSortRadixAndMerge(Thread*, Key*, Key*, size_t);
+void threadFullRadix(Thread*, Key*, Key*, size_t);
+
+void selectionSort(Key* data, size_t entryCount);
+void spawnThreads(int);
+void entriesToKeys(Record *entries, SortKey *keys, size_t entryCount);
+void keysToEntries(SortKey *keys, Record *entries, size_t entryCount);
+void preFault(void* buffer, int size);
+void printKeys(const Key* arr, int n);
+void parallelMerge(Thread* thread, Key* bufferA, Key* bufferB, size_t entryCount);
+static void radixPass(Thread* thread, Key* source, Key* dest, int pass, int entryCount);
 
 int main(int argc, char* argv[]) {	
-	/*Record a = {0x00000001, {{'a'}}};
-	Record b = {0x00000001, {{'b'}}};
+	/*Record a = {0x00000001, {{'b'}}};
+	Record b = {0x00000001, {{'a'}}};
 	Record c = {0x00000002, {{'c'}}};
 	Record d = {0x00000001, {{'d'}}};
 
 	openInput("400b.dat");
-	openOutput("cool.dat");
+	openOutput("test/trouble.dat");
 	World.output.data[0] = a;
 	World.output.data[1] = b;
 	World.output.data[2] = c;
 	World.output.data[3] = d;
-	closeOutput();*/
-	//return 0;
+	closeOutput();
+	return 0;*/
 
 	if (argc <= 3) {
 		fprintf(stderr, "Uso incorreto. Utilize com <entrada> <saída> <threads>\n");
@@ -133,9 +143,7 @@ int main(int argc, char* argv[]) {
 
 	// Open files
 	openInput(inputFile);	
-	openOutput(outputFile);
-
-	
+	openOutput(outputFile);	
 
 	// Spawn N threads
 	spawnThreads(threadCount);
@@ -159,7 +167,6 @@ void spawnThreads(int threadCount) {
 	barr_init(&World.rxPassBarrier, threadCount);
 	barr_init(&World.rxDistCountedBarrier, threadCount);
 	slowbarr_init(&World.rxCountedBarrier, threadCount);
-	countbarr_init(&World.rxCountDoneBarrier, threadCount, 2);
 	World.keyColaescingStarted = false;
 	World.rxTallyCompleted = -1;
 
@@ -187,6 +194,22 @@ void spawnThreads(int threadCount) {
 		t->radixCount = &countArray[(i * 2 + 0) * RADIX_COUNT];
 		t->acculCount = &countArray[(i * 2 + 1) * RADIX_COUNT];
 		#endif
+
+		// Every thread will be responsible for a portion of the global count array. This section
+		// splits the count array fairly even if the number of threads isn't a multiple of the
+		// count array size.
+		{
+			int div = RADIX_COUNT / World.numThreads;
+			int rem = RADIX_COUNT % World.numThreads;
+			bool compensate = i < rem;
+			
+			// Give an extra element to the first few threads
+			t->rxCountSize = div + compensate;
+
+			// Determine exactly where the count index should start for this thread
+			t->rxCountOffset = i * div + ((compensate ? i : rem));
+		}
+
 		pthread_create(&World.threads[i].thread, NULL, threadMain, &World.threads[i]);
 
 		offset += count;
@@ -249,9 +272,12 @@ void threadSortRadixAndMerge(Thread* thread, Key* bufferA, Key* bufferB, size_t 
 #endif
 
 void radixParallelTally(Thread* thread) {
-	// Every thread will be responsible for a portion of the global count array
-	const int countSize = RADIX_COUNT / World.numThreads;
-	const int countOffset = thread->index * countSize;
+	const int thIndex = thread->index;
+	const int countSize = thread->rxCountSize;
+	const int countOffset = thread->rxCountOffset;
+
+	// Wait for all threads to finish counting in the earlier phase.
+	barr_wait(&World.rxDistCountedBarrier);
 
 	// Zero-out the portion of the array i'm responsible for
 	int* myDigits = &World.rxTally[countOffset];
@@ -279,7 +305,7 @@ void radixParallelTally(Thread* thread) {
 	}
 }
 
-void radixSingleTally(Thread* thread) {
+static void radixSingleTally(Thread* thread) {
 	// If I'm the last thread to arrive here, I won't wait, I will perform the tally for everyone.
 	// Otherwise, I'm not the last thread to finish counting. I won't be the tally thread,
 	// I will wait here until the tally thead notifies me.
@@ -309,66 +335,20 @@ void radixSingleTally(Thread* thread) {
 	}
 }
 
-void radixPass(Thread* thread, Key* source, Key* dest, int pass, int entryCount) {
+static INLINE void radixPass(Thread* thread, Key* source, Key* dest, int pass, int entryCount) {
 	int* count = thread->radixCount;
 	memset(count, 0, RADIX_COUNT * sizeof(int));
 	
 	// Perform the parallel counting portion
 	radixCount(source, entryCount, pass * RADIX_BITS, count);
 
-	// :: PARTIAL DISTRIBUTED TALLY
-	int index = countbarr_wait(&World.rxCountDoneBarrier);
-	if(index) {
-		const int digitDivision = RADIX_COUNT / 2;
-		int countOffset = (index - 1) * digitDivision;
-
-		int* myDigits = &World.rxTally[countOffset];
-		memset(myDigits, 0, sizeof(int[digitDivision]));
-
-		for (int t = World.numThreads - 1; t >= 0; t--) {
-			Thread* th = &World.threads[t];
-
-			int* acculCount = &th->acculCount[countOffset];
-			int* radixCount = &th->radixCount[countOffset];
-
-			// Every thread gets an accumulated count.
-			memcpy(acculCount, myDigits, sizeof(int[digitDivision]));	
-
-			for (int i = 0; i < digitDivision; i++) {
-				myDigits[i] += radixCount[i];
-			}
-		}
-
-		countbarr_lower(&World.rxCountDoneBarrier);
-	}
-
-	if(slowbarr_wait(&World.rxCountedBarrier)) {
-		radixCountToPrefix(World.rxTally);
-		slowbarr_lower(&World.rxCountedBarrier);
-	}
-
 	// :: ---- DISTRIBUTED COUNTING -- SINGLE PREFIX THREAD
-	/*
-	// Wait for all threads to finish counting.
-	barr_wait(&World.rxDistCountedBarrier);
-
-	// Perform a parallel tally
 	radixParallelTally(thread);
-	*/
 
 	// :: ---- SINGLE TALLY THREAD
 	//radixSingleTally(thread);
 
 	// Now the perform the final coalescing step in parallel
-/*	int* prefix = count;
-	for (int i = 0; i < RADIX_COUNT; i++) {
-		prefix[i] = World.rxTally[i] - thread->acculCount[i];
-	}
-	
-	// The tally has been finished. The global tally information can be used to coalesce the sorted portions now.
-	radixCoalesce(source, entryCount, pass * RADIX_BITS, prefix, dest);
-*/
-
 	radixCoalesceExt(source, entryCount, pass * RADIX_BITS, World.rxTally, thread->acculCount, dest);
 
 	// Everyone must finish their coalescing to consider the pass finished.
@@ -524,7 +504,7 @@ void openOutput(const char* outputFile) {
 void closeOutput() {
 	size_t fileSize = World.input.entryCount * sizeof(Record);
 
-	if (msync(World.output.data, fileSize, MS_ASYNC) == -1) {
+	if (msync(World.output.data, fileSize, MS_SYNC) == -1) {
 		fprintf(stderr, "Output sync failure.\n");
 		exit(-1);
 	}
