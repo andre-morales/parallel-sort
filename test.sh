@@ -1,4 +1,4 @@
-declare -i i=17000
+declare -i i=1000
 set -e
 while true
 do

@@ -5,14 +5,8 @@
 
 typedef struct {
 	int target;
-	#if !USE_SPINLOCKS
-	ConditionLock lock;
 	int count;
-	#else
-	atomic_int atCount;
-	atomic_int atHolding;
-	atomic_int atFlag;
-	#endif
+	ConditionLock lock;
 } SlowBarrier;
 
 void slowbarr_init(SlowBarrier* barrier, int target);

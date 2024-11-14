@@ -4,11 +4,8 @@
 
 #pragma GCC optimize("-O2")
 
-#define RADIX_8 256
-#define RADIX_16 65536
-
 #define RADIX_BITS 16
-#define RADIX_COUNT RADIX_16
+#define RADIX_COUNT 65536
 
 static INLINE void radixCount(Key* arr, int n, int shift, int* count) {
 	// Count occurrences of each word value in the count array
@@ -23,10 +20,6 @@ static INLINE void radixCountToPrefix(int* count) {
 		count[i] += count[i - 1];
 	}
 }
-
-void radixCoalesce(Key* arr, int n, int shift, int* prefix, Key* output);
-void radixCountSort(Key* arr, int n, int shift, Key* output);
-void radixSort(Key* arr, int n, Key* output);
 
 static INLINE void radixCoalesceExt(const Key* restrict arr, int n, int shift, const int* prefix, int* restrict count, Key* restrict output) {
 	for (int i = n - 1; i >= 0; --i) {

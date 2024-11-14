@@ -4,15 +4,8 @@
 
 typedef struct {
 	int target;
-
-	#if !USE_SPINLOCKS
-	ConditionLock lock;
 	int count;
-	#else
-	atomic_int atCount;
-	atomic_int atHolding;
-	atomic_int atFlag;
-	#endif
+	ConditionLock lock;
 } Barrier;
 
 void barr_init(Barrier* barrier, int target);
