@@ -4,11 +4,14 @@
 #include "barrier.h"
 #include "slow_barrier.h"
 #include "allocator.h"
+
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
+//#include <sys/sysinfo.h>
 #include <pthread.h>
 #include <fcntl.h>
+
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,6 +86,12 @@ void entriesToKeys(Record*, SortKey*, size_t);
 void keysToEntries(SortKey*, Record*, size_t);
 
 int main(int argc, char* argv[]) {	
+	/*printf("This system has %d processors configured and " "%d processors available.\n", get_nprocs_conf(), get_nprocs());
+	int cores = sysconf(_SC_NPROCESSORS_ONLN);
+    printf("Logical cores available: %d\n", cores);
+	
+	return 0;*/
+	
 	if (argc <= 3) {
 		fprintf(stderr, "Uso incorreto. Utilize com <entrada> <saída> <threads>\n");
 		return -1;
@@ -299,6 +308,7 @@ void openOutput(const char* outputFile) {
 
 	// Set output file to the same size as the input file.
 	size_t fileSize = World.input.entryCount * sizeof(Record);
+
 	if (ftruncate(fd, fileSize) == -1) {
 		fprintf(stderr, "Output truncate failed.\n");
 		exit(-1);

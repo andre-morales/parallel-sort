@@ -1,6 +1,11 @@
 *.dat
 *.out
+*.exe
 verify
 ep
 epd
 generate
+.Rproj.user
+benchmarks/
+*.csv
+.Rhistory
