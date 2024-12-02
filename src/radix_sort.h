@@ -2,8 +2,6 @@
 #include "psort.h"
 #include <stdint.h>
 
-#pragma GCC optimize("-O2")
-
 #define RADIX_BITS 16
 #define RADIX_COUNT 65536
 

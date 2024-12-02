@@ -23,4 +23,4 @@ readRaw <- function(tableName) {
 	return(table)
 }
 
-dataFrame <<- readRaw("benchmark_disk_disk_vm.csv")
+dataFrame <<- readRaw("wsl_ram_ram.csv")

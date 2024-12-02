@@ -8,7 +8,7 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/mman.h>
-//#include <sys/sysinfo.h>
+#include <sys/sysinfo.h>
 #include <pthread.h>
 #include <fcntl.h>
 
@@ -21,7 +21,7 @@
 
 typedef struct {
 	Record* data;
-	size_t fileSize;
+	size_t fileSize;	
 	size_t entryCount;
 } TInput;
 
@@ -84,14 +84,9 @@ void radixPass(Thread*, Key*, Key*, int, int);
 void radixParallelTally(Thread*);
 void entriesToKeys(Record*, SortKey*, size_t);
 void keysToEntries(SortKey*, Record*, size_t);
+int getNumThreads(int);
 
 int main(int argc, char* argv[]) {	
-	/*printf("This system has %d processors configured and " "%d processors available.\n", get_nprocs_conf(), get_nprocs());
-	int cores = sysconf(_SC_NPROCESSORS_ONLN);
-    printf("Logical cores available: %d\n", cores);
-	
-	return 0;*/
-	
 	if (argc <= 3) {
 		fprintf(stderr, "Uso incorreto. Utilize com <entrada> <saída> <threads>\n");
 		return -1;
@@ -103,7 +98,6 @@ int main(int argc, char* argv[]) {
 
 	char* endPtr = NULL;
 	int threadCount = strtol(strThreads, &endPtr, 10);
-	World.numThreads = threadCount;
 
 	if (endPtr == strThreads || threadCount < 0) {
 		fprintf(stderr, "Invalid thread count. N >= 0.");
@@ -113,12 +107,31 @@ int main(int argc, char* argv[]) {
 	// Open files
 	openInput(inputFile);	
 	openOutput(outputFile);	
-
-	// Spawn N threads
+	
+	// Determine the amount of threads to be used and spawn them.
+	World.numThreads = getNumThreads(threadCount);
 	spawnThreads(threadCount);
 
 	closeOutput();
 	return 0; 
+}
+
+int getNumThreads(int suggestion) {
+	int n = World.input.entryCount;
+	int t;
+	if (suggestion != 0) {
+		t = suggestion;
+	} else {
+		// Depending on the number of machine threads available, don't use all of them.
+		int p = get_nprocs();
+		if (t <= 4) t = p;
+		else if (t <= 8) t = p - 1;
+		else if (t <= 12) t = p - 2;
+		else t = p * 8 / 10;
+	}
+	
+	// Make sure we don't have more threads than entries
+	return (n < suggestion) ? n : suggestion;
 }
 
 void spawnThreads(int threadCount) {
@@ -192,6 +205,7 @@ void* threadMain(void* threadInputArg) {
 	// Convert full records to sorting entries in buffer A
 	entriesToKeys(input, bufferA, entryCount);
 
+	// Perform the radix sort on the keys array
 	threadFullRadix(thread, bufferA, bufferB, entryCount);
 
 	// Coalesce only my own original key range. The other threads will coalesce theirs as well
