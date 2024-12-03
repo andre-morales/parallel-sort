@@ -77,14 +77,14 @@ World_t World;
 void openInput(const char*);
 void openOutput(const char*);
 void closeOutput();
-void spawnThreads(int);
+int getNumThreads(int);
+void spawnThreads();
 void* threadMain(void*);
 void threadFullRadix(Thread*, Key*, Key*, size_t);
 void radixPass(Thread*, Key*, Key*, int, int);
 void radixParallelTally(Thread*);
 void entriesToKeys(Record*, SortKey*, size_t);
 void keysToEntries(SortKey*, Record*, size_t);
-int getNumThreads(int);
 
 int main(int argc, char* argv[]) {	
 	if (argc <= 3) {
@@ -110,7 +110,7 @@ int main(int argc, char* argv[]) {
 	
 	// Determine the amount of threads to be used and spawn them.
 	World.numThreads = getNumThreads(threadCount);
-	spawnThreads(threadCount);
+	spawnThreads();
 
 	closeOutput();
 	return 0; 
@@ -123,18 +123,21 @@ int getNumThreads(int suggestion) {
 		t = suggestion;
 	} else {
 		// Depending on the number of machine threads available, don't use all of them.
-		int p = get_nprocs();
-		if (t <= 4) t = p;
-		else if (t <= 8) t = p - 1;
-		else if (t <= 12) t = p - 2;
-		else t = p * 8 / 10;
+		int avail = get_nprocs();
+
+		if      (avail <= 4)  t = avail;
+		else if (avail <= 8)  t = avail - 1;
+		else if (avail <= 12) t = avail - 2;
+		else                  t = avail * 8 / 10;
 	}
 	
 	// Make sure we don't have more threads than entries
-	return (n < suggestion) ? n : suggestion;
+	return (n < t) ? n : t;
 }
 
-void spawnThreads(int threadCount) {
+void spawnThreads() {
+	int threadCount = World.numThreads;
+
 	// Allocate major Key buffers
 	mm_alloc(&World.bufferA, sizeof(Key[World.input.entryCount]));
 	mm_alloc(&World.bufferB, sizeof(Key[World.input.entryCount]));

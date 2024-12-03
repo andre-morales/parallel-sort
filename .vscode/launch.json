@@ -6,7 +6,7 @@
 			"type": "cppdbg",
 			"request": "launch",
 			"program": "${workspaceRoot}/epd",
-			"args": ["1mb.dat", "result.out", "5"],
+			"args": ["test/1mb.dat", "result.out", "0"],
 			"stopAtEntry": false,
 			"cwd": "${workspaceFolder}",
 			"environment": [],

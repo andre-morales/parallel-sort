@@ -13,10 +13,10 @@ ep: Makefile src/*.c src/*.h
 	gcc $(SOURCES) -o ep -Wall -Werror -pthread -std=gnu11 -O -Wno-unused-variable -Wno-unused-value -Wno-unused-function
 
 generate:
-	gcc ep_input_generator.c -o generate -O2 -fno-inline -pg
+	gcc tools/ep_input_generator.c -o generate -O2 -fno-inline -pg
 
 verify:
-	gcc verify.c -o verify -O2
+	gcc tools/verify.c -o verify -O2
 
 test: build
 	./ep test/trouble.dat result.out 1
@@ -41,6 +41,11 @@ test: build
 	./verify test/1mb.dat q
 
 clean:
-	rm result.out
-	rm ep.exe
-	rm ep
+	-@rm result.out
+	-@rm ep.exe
+	-@rm ep
+	-@rm epd
+	-@rm gmon.out
+	-@rm result.out
+	-@rm result.json
+	

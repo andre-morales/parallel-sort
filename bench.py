@@ -14,12 +14,13 @@ def run_hyperfine(size, threads):
 			"hyperfine",
 			"--export-json", "result.json",
 			"--export-csv", f"benchmarks/{size}mb.{threads}.csv",
-			"--warmup", "0",
-			"--runs", "3",
+			"--warmup", "5",
+			"--runs", "8",
 			"--parameter-list", "threads", str(threads),
-			"--prepare", "sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches; sleep 4",
-			f"sudo nice --19 ./ep test/{size}mb.dat result.out {threads}",
-			#"./ep /mnt/temp/a/file.dat /mnt/temp/a/result.out {threads}"
+			"--prepare", "sudo sync; echo 3 | sudo tee /proc/sys/vm/drop_caches; sleep 1",
+			"sudo nice --19 ./ep /mnt/temp/a/file.dat /mnt/temp/a/result.out {threads}"
+			#f"sudo nice --19 ./ep test/{size}mb.dat result.out {threads}",
+			
 		]
 		result = subprocess.run(cmd, check=True, capture_output=True, text=True)
 
